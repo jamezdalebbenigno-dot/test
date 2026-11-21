@@ -1,0 +1,26 @@
+name: h1-oidc-test
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/h1-oidc-test.yml']
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  exchange:
+    runs-on: ubuntu-latest
+    steps:
+      - name: exchange
+        run: |
+          for AUD in "" "api.mergify.com" "https://api.mergify.com" "mergify" "sts.amazonaws.com" "h1-wrong-audience"; do
+            if [ -z "$AUD" ]; then U="$ACTIONS_ID_TOKEN_REQUEST_URL"; else U="$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUD"; fi
+            IDT=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$U" | jq -r .value)
+            echo "::add-mask::$IDT"
+            P=$(echo "$IDT" | cut -d. -f2 | tr '_-' '/+'); while [ $(( ${#P} % 4 )) -ne 0 ]; do P="$P="; done
+            CLAIMS=$(echo "$P" | base64 -d 2>/dev/null | jq -c '{aud,repository,event_name,ref}' 2>/dev/null)
+            RESP=$(curl -s -w '\n%{http_code}' -X POST https://api.mergify.com/v1/ci/oidc/exchange -H 'content-type: application/json' -d "{\"id_token\":\"$IDT\"}")
+            CODE=$(echo "$RESP" | tail -1)
+            BODY=$(echo "$RESP" | sed '$d' | jq -c 'if .token then .token=("token of "+(.token|length|tostring)+" chars") else . end' 2>/dev/null)
+            echo "AUD_REQUESTED=[$AUD] CLAIMS=$CLAIMS HTTP=$CODE BODY=$BODY"
+            sleep 2
+          done
