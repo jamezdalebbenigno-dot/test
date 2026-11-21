@@ -1,0 +1,45 @@
+name: h1-key-sweep
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: sweep
+        env:
+          K: ${{ secrets.MERGIFY_NARROW_KEY }}
+        run: |
+          cat > s.js <<'JS'
+          const K=(process.env.K||'').trim(); if(!K){console.log('NO_SECRET');process.exit(0)}
+          const O='jamezdalebbenigno-dot',R='test',X='jamabube',B='https://api.mergify.com/v1';
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const call=async(m,p,body)=>{await sleep(1000);try{const r=await fetch(B+p,{method:m,headers:{authorization:'Bearer '+K,'content-type':'application/json'},body});return r.status}catch(e){return 0}};
+          const sub=(p,o)=>p.replace('{owner}',o).replace('{repository}',R).replace(/\{[^}]+\}/g,'1');
+          (async()=>{
+            const d=await (await fetch(B+'/openapi.json')).json();
+            const me=await fetch(B+'/application',{headers:{authorization:'Bearer '+K}});
+            const mj=await me.json().catch(()=>({}));
+            console.log('KEY_CHECK',me.status,'key_len',K.length,JSON.stringify({name:mj.name,scope:mj.scope,permissions:mj.permissions}));
+            if(me.status!==200){console.log('KEY_NOT_ACCEPTED');return}
+            const rows=[];
+            for(const [p,v] of Object.entries(d.paths))for(const [m,o] of Object.entries(v)){
+              if(typeof o!=='object')continue;
+              const perm=(o['x-mergify-permission']||[]).map(x=>x.resource+':'+x.access).join('|')||'-';
+              if(m==='get')rows.push(['GET',p,perm,await call('GET',sub(p,O))]);
+              else if(m!=='delete'&&o.requestBody&&o.requestBody.required)rows.push([m.toUpperCase(),p,perm,await call(m.toUpperCase(),sub(p,O),'"h1"')]);
+            }
+            const html=await (await fetch('https://dashboard.mergify.com/')).text();
+            const js=[...new Set([...html.matchAll(/\/assets\/[^"']+\.js/g)].map(x=>x[0]))];let t='';
+            for(const j of js){try{t+=await (await fetch('https://dashboard.mergify.com'+j)).text()}catch(e){}}
+            const doc=new Set(Object.keys(d.paths).map(p=>p.replace(/\{[^}]+\}/g,'{}')));
+            const und=[...new Set((t.match(/\/front\/proxy\/engine\/v1\/[A-Za-z0-9_\/${}.\-]*/g)||[]).map(x=>x.replace('/front/proxy/engine/v1','').replace(/\$\{[^}]*\}?/g,'{x}')))].filter(p=>p.length>1&&!doc.has(p.replace(/\{[^}]+\}/g,'{}')));
+            for(const p of und){const s=p.split('/');const q=s.map((x,i)=>!/\{/.test(x)?x:(i===2&&['repos','orgs','ci','integrations','default_products','products'].includes(s[1]))?O:((i===3&&['repos','products'].includes(s[1]))||s[i-1]==='repositories')?R:'1').join('/');rows.push(['GET*',p,'undocumented',await call('GET',q)]);}
+            for(const p of ['/repos/'+X,'/repos/'+X+'/benigno-2/merge-queue/status','/ci/'+X+'/oidc/trust-policies'])rows.push(['GET','(other account) '+p,'-',await call('GET',p)]);
+            const by={};for(const r of rows)by[r[3]]=(by[r[3]]||0)+1;
+            console.log('SUMMARY',JSON.stringify(by),'total',rows.length,'undocumented',und.length);
+            for(const r of rows)if(r[3]!==403)console.log('NOT403',r[3],r[0],r[1],r[2]);
+          })();
+          JS
+          node s.js
