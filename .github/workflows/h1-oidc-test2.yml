@@ -1,0 +1,49 @@
+name: h1-oidc-test2
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/h1-oidc-test2.yml']
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  reach:
+    runs-on: ubuntu-latest
+    steps:
+      - name: reach
+        run: |
+          T=""
+          for AUD in "https://api.mergify.com" "api.mergify.com" "mergify" ""; do
+            if [ -z "$AUD" ]; then U="$ACTIONS_ID_TOKEN_REQUEST_URL"; else U="$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUD"; fi
+            IDT=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$U" | jq -r .value)
+            echo "::add-mask::$IDT"
+            R=$(curl -s -X POST https://api.mergify.com/v1/ci/oidc/exchange -H 'content-type: application/json' -d "{\"id_token\":\"$IDT\"}")
+            T=$(echo "$R" | jq -r '.token // empty')
+            if [ -n "$T" ]; then echo "::add-mask::$T"; echo "EXCHANGE_OK audience=[$AUD] token_len=${#T} prefix=$(echo "$T" | cut -c1-4) expires_in=$(echo "$R" | jq -r .expires_in)"; break; else echo "EXCHANGE_REFUSED audience=[$AUD] $(echo "$R" | cut -c1-200)"; fi
+            sleep 2
+          done
+          [ -z "$T" ] && exit 0
+          ME=jamezdalebbenigno-dot; MR=test; A=jamabube; AR=benigno-2; B=https://api.mergify.com/v1
+          call() { sleep 1; O=$(curl -s -w '\n%{http_code}' -X "$1" -H "Authorization: Bearer $T" -H 'content-type: application/json' ${3:+-d "$3"} "$B$2"); echo "CALL $1 $2 -> $(echo "$O" | tail -1) $(echo "$O" | sed '$d' | tr -d '\n' | cut -c1-160)"; }
+          echo "== control: listed for CI token, own repository"
+          call GET /ci/$ME/repositories/$MR/quarantines
+          call GET /ci/$ME/repositories/$MR/test-states
+          echo "== own organisation, operations NOT listed for a CI token"
+          call GET /application
+          call GET /ci/$ME/oidc/trust-policies
+          call GET /ci/$ME/oidc/exchanges
+          call GET /repos/$ME
+          call GET /repos/$ME/$MR/merge-queue/status
+          call GET /orgs/$ME/users
+          call GET /orgs/$ME/logs
+          call GET /orgs/$ME/api-version
+          call GET /repos/$ME/$MR/scheduled_freeze
+          call POST /ci/$ME/oidc/trust-policies '{"name":"h1-ci-token-wrote-this","provider":"github_actions","repositories":{"mode":"all"},"conditions":{"events":"any"}}'
+          echo "== another account (ours): must all be refused"
+          call GET /ci/$A/repositories/$AR/quarantines
+          call GET /ci/$A/repositories/$AR/test-states
+          call GET /ci/$A/oidc/trust-policies
+          call GET /repos/$A
+          call GET /orgs/$A/users
+          echo "== dashboard backend with the CI token"
+          sleep 1; echo "FRONT -> $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" https://dashboard.mergify.com/front/user)"
